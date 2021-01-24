@@ -5,7 +5,9 @@ defmodule AdafruitLedBackpack.Ht16k33 do
 
   import Bitwise
 
-  alias Circuits.I2C
+  @interface :adafruit_led_backpack
+             |> Application.compile_env(__MODULE__, [])
+             |> Keyword.get(:interface, AdafruitLedBackpack.Interface.I2C)
 
   # TODO: Use Agent instead of GenServer?
 
@@ -67,7 +69,7 @@ defmodule AdafruitLedBackpack.Ht16k33 do
 
   @impl GenServer
   def init({bus_name, address}) do
-    case I2C.open(bus_name) do
+    case @interface.open(bus_name) do
       {:ok, i2c_bus} ->
         {:ok, %{address: address, buffer: @empty_buffer, i2c_bus: i2c_bus}, {:continue, :begin}}
 
@@ -78,7 +80,7 @@ defmodule AdafruitLedBackpack.Ht16k33 do
 
   @impl GenServer
   def handle_continue(:begin, %{address: address, i2c_bus: i2c_bus} = state) do
-    I2C.write!(i2c_bus, address, [@ht16k33_system_setup ||| @ht16k33_oscillator])
+    @interface.write!(i2c_bus, address, [@ht16k33_system_setup ||| @ht16k33_oscillator])
     {:reply, :ok, state} = handle_call({:set_blink, @ht16k33_blink_off}, nil, state)
     {:reply, :ok, state} = handle_call({:set_brightness, 15}, nil, state)
     {:noreply, state}
@@ -86,7 +88,10 @@ defmodule AdafruitLedBackpack.Ht16k33 do
 
   @impl GenServer
   def handle_call({:set_blink, frequency}, _from, %{address: address, i2c_bus: i2c_bus} = state) do
-    I2C.write!(i2c_bus, address, [@ht16k33_blink_cmd ||| @ht16k33_blink_displayon ||| frequency])
+    @interface.write!(i2c_bus, address, [
+      @ht16k33_blink_cmd ||| @ht16k33_blink_displayon ||| frequency
+    ])
+
     {:reply, :ok, state}
   end
 
@@ -95,7 +100,7 @@ defmodule AdafruitLedBackpack.Ht16k33 do
         _from,
         %{address: address, i2c_bus: i2c_bus} = state
       ) do
-    I2C.write!(i2c_bus, address, [@ht16k33_cmd_brightness ||| brightness])
+    @interface.write!(i2c_bus, address, [@ht16k33_cmd_brightness ||| brightness])
     {:reply, :ok, state}
   end
 
@@ -117,7 +122,7 @@ defmodule AdafruitLedBackpack.Ht16k33 do
         %{address: address, buffer: buffer, i2c_bus: i2c_bus} = state
       ) do
     for {byte, i} <- Enum.with_index(buffer) do
-      I2C.write!(i2c_bus, address, [i, byte])
+      @interface.write!(i2c_bus, address, [i, byte])
     end
 
     {:reply, :ok, state}
