@@ -9,22 +9,24 @@ defmodule AdafruitLedBackpack.Ht16k33 do
              |> Application.compile_env(__MODULE__, [])
              |> Keyword.get(:interface, AdafruitLedBackpack.Interface.I2C)
 
-  # TODO: Use Agent instead of GenServer?
-
   @default_bus_name "i2c-1"
   @default_address 0x70
 
-  @ht16k33_blink_cmd 0x80
-  @ht16k33_blink_displayon 0x01
-  @ht16k33_blink_off 0x00
-  @ht16k33_blink_2hz 0x02
-  @ht16k33_blink_1hz 0x04
-  @ht16k33_blink_halfhz 0x06
   @ht16k33_system_setup 0x20
   @ht16k33_oscillator 0x01
+
+  @setup_data <<@ht16k33_system_setup ||| @ht16k33_oscillator>>
+
+  @ht16k33_blink_cmd 0x80
+  @ht16k33_blink_displayon @ht16k33_blink_cmd ||| 0x01
+  @ht16k33_blink_off <<@ht16k33_blink_displayon ||| 0x00>>
+  @ht16k33_blink_2hz <<@ht16k33_blink_displayon ||| 0x02>>
+  @ht16k33_blink_1hz <<@ht16k33_blink_displayon ||| 0x04>>
+  @ht16k33_blink_halfhz <<@ht16k33_blink_displayon ||| 0x06>>
+
   @ht16k33_cmd_brightness 0xE0
 
-  @empty_buffer List.duplicate(0, 16)
+  @empty_buffer [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
   @doc """
   Create an HT16K33 driver for device on the specified I2C address (defaults to
@@ -43,6 +45,11 @@ defmodule AdafruitLedBackpack.Ht16k33 do
     mapped_frequency = map_frequency(frequency)
     GenServer.call(server, {:set_blink, mapped_frequency})
   end
+
+  defp map_frequency(:blink_off), do: @ht16k33_blink_off
+  defp map_frequency(:blink_2hz), do: @ht16k33_blink_2hz
+  defp map_frequency(:blink_1hz), do: @ht16k33_blink_1hz
+  defp map_frequency(:blink_halfhz), do: @ht16k33_blink_halfhz
 
   def set_brightness(server \\ __MODULE__, brightness) when brightness in 0..15 do
     GenServer.call(server, {:set_brightness, brightness})
@@ -70,8 +77,8 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   @impl GenServer
   def init({bus_name, address}) do
     case @interface.open(bus_name) do
-      {:ok, i2c_bus} ->
-        {:ok, %{address: address, buffer: @empty_buffer, i2c_bus: i2c_bus}, {:continue, :begin}}
+      {:ok, bus} ->
+        {:ok, %{address: address, buffer: @empty_buffer, bus: bus}, {:continue, :begin}}
 
       error ->
         {:stop, error}
@@ -79,28 +86,40 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   end
 
   @impl GenServer
-  def handle_continue(:begin, %{address: address, i2c_bus: i2c_bus} = state) do
-    @interface.write!(i2c_bus, address, [@ht16k33_system_setup ||| @ht16k33_oscillator])
-    {:reply, :ok, state} = handle_call({:set_blink, @ht16k33_blink_off}, nil, state)
-    {:reply, :ok, state} = handle_call({:set_brightness, 15}, nil, state)
+  def handle_continue(:begin, state) do
+    write_setup!(state)
+    write_blink!(@ht16k33_blink_off, state)
+    write_brightness!(15, state)
     {:noreply, state}
   end
 
-  @impl GenServer
-  def handle_call({:set_blink, frequency}, _from, %{address: address, i2c_bus: i2c_bus} = state) do
-    @interface.write!(i2c_bus, address, [
-      @ht16k33_blink_cmd ||| @ht16k33_blink_displayon ||| frequency
-    ])
+  defp write_setup!(%{address: address, bus: bus}) do
+    @interface.write!(bus, address, @setup_data)
+  end
 
+  defp write_blink!(frequency, %{address: address, bus: bus}) do
+    @interface.write!(bus, address, [frequency])
+  end
+
+  defp write_brightness!(brightness, %{address: address, bus: bus}) do
+    data = brightness_data(brightness)
+    @interface.write!(bus, address, data)
+  end
+
+  for brightness <- 0..15 do
+    def brightness_data(unquote(brightness)) do
+      unquote(<<@ht16k33_cmd_brightness ||| brightness>>)
+    end
+  end
+
+  @impl GenServer
+  def handle_call({:set_blink, frequency}, _from, state) do
+    write_blink!(frequency, state)
     {:reply, :ok, state}
   end
 
-  def handle_call(
-        {:set_brightness, brightness},
-        _from,
-        %{address: address, i2c_bus: i2c_bus} = state
-      ) do
-    @interface.write!(i2c_bus, address, [@ht16k33_cmd_brightness ||| brightness])
+  def handle_call({:set_brightness, brightness}, _from, state) do
+    write_brightness!(brightness, state)
     {:reply, :ok, state}
   end
 
@@ -116,13 +135,9 @@ defmodule AdafruitLedBackpack.Ht16k33 do
     {:reply, :ok, %{state | buffer: updated_buffer}}
   end
 
-  def handle_call(
-        :write_display,
-        _from,
-        %{address: address, buffer: buffer, i2c_bus: i2c_bus} = state
-      ) do
+  def handle_call(:write_display, _from, %{address: address, buffer: buffer, bus: bus} = state) do
     for {byte, i} <- Enum.with_index(buffer) do
-      @interface.write!(i2c_bus, address, [i, byte])
+      @interface.write!(bus, address, <<i, byte>>)
     end
 
     {:reply, :ok, state}
@@ -135,11 +150,6 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   def handle_call({:update_buffer, pos, fun}, _from, %{buffer: buffer} = state) do
     {:reply, :ok, %{state | buffer: List.update_at(buffer, pos, fun)}}
   end
-
-  defp map_frequency(:blink_off), do: @ht16k33_blink_off
-  defp map_frequency(:blink_2hz), do: @ht16k33_blink_2hz
-  defp map_frequency(:blink_1hz), do: @ht16k33_blink_1hz
-  defp map_frequency(:blink_halfhz), do: @ht16k33_blink_halfhz
 
   defmacro __using__(_opts) do
     quote do
