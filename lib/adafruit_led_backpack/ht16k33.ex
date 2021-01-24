@@ -29,8 +29,11 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   @empty_buffer [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
   @doc """
-  Create an HT16K33 driver for device on the specified I2C address (defaults to
-  0x70) and I2C bus (defaults to platform specific bus).
+  Create an HT16K33 driver for device on the specified address (defaults to
+  0x#{Integer.to_string(@default_address, 16)}) and bus (defaults to
+  #{inspect(@default_bus_name)}).
+
+  Initialize driver with LEDs enabled and all turned off.
   """
   def start_link(opts \\ []) do
     bus_name = opts[:bus_name] || @default_bus_name
@@ -40,8 +43,14 @@ defmodule AdafruitLedBackpack.Ht16k33 do
     GenServer.start_link(__MODULE__, {bus_name, address}, name: name)
   end
 
-  def set_blink(server \\ __MODULE__, frequency)
-      when frequency in [:blink_off, :blink_2hz, :blink_1hz, :blink_halfhz] do
+  @frequencies [:blink_off, :blink_2hz, :blink_1hz, :blink_halfhz]
+
+  @doc """
+  Blink display at specified frequency.
+
+  Frequency must be one of: #{@frequencies |> Enum.map(&"`:#{&1}`") |> Enum.join(", ")}.
+  """
+  def set_blink(server \\ __MODULE__, frequency) when frequency in @frequencies do
     mapped_frequency = map_frequency(frequency)
     GenServer.call(server, {:set_blink, mapped_frequency})
   end
@@ -51,20 +60,32 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   defp map_frequency(:blink_1hz), do: @ht16k33_blink_1hz
   defp map_frequency(:blink_halfhz), do: @ht16k33_blink_halfhz
 
+  @doc """
+  Set brightness of entire display to specified value (16 levels, from 0 to 15).
+  """
   def set_brightness(server \\ __MODULE__, brightness) when brightness in 0..15 do
     GenServer.call(server, {:set_brightness, brightness})
   end
 
-  def set_led(server \\ __MODULE__, led, value) when led in 0..127 and value in 0..1 do
+  @doc """
+  Sets specified LED (value of 0 to 127) to the specified value, `:off` or `:on`.
+  """
+  def set_led(server \\ __MODULE__, led, value) when led in 0..127 and value in [:off, :on] do
     pos = div(led, 8)
     offset = rem(led, 8)
     GenServer.call(server, {:set_led, pos, offset, value})
   end
 
+  @doc """
+  Write display buffer to display interface.
+  """
   def write_display(server \\ __MODULE__) do
     GenServer.call(server, :write_display)
   end
 
+  @doc """
+  Clear contents of display buffer.
+  """
   def clear(server \\ __MODULE__) do
     GenServer.call(server, :clear)
   end
@@ -107,7 +128,7 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   end
 
   for brightness <- 0..15 do
-    def brightness_data(unquote(brightness)) do
+    defp brightness_data(unquote(brightness)) do
       unquote(<<@ht16k33_cmd_brightness ||| brightness>>)
     end
   end
@@ -153,6 +174,11 @@ defmodule AdafruitLedBackpack.Ht16k33 do
 
   defmacro __using__(_opts) do
     quote do
+      @doc """
+      Returns a specification to start this module under a supervisor.
+
+      See `Supervisor`.
+      """
       def child_spec(opts) do
         %{
           id: __MODULE__,
@@ -160,28 +186,34 @@ defmodule AdafruitLedBackpack.Ht16k33 do
         }
       end
 
+      @doc delegate_to: {unquote(__MODULE__), :start_link, 1}
       def start_link(opts \\ []) do
         opts
         |> Keyword.put_new(:name, __MODULE__)
         |> unquote(__MODULE__).start_link()
       end
 
+      @doc delegate_to: {unquote(__MODULE__), :set_blink, 2}
       def set_blink(server \\ __MODULE__, frequency) do
         unquote(__MODULE__).set_blink(server, frequency)
       end
 
+      @doc delegate_to: {unquote(__MODULE__), :set_brightness, 2}
       def set_brightness(server \\ __MODULE__, brightness) do
         unquote(__MODULE__).set_brightness(server, brightness)
       end
 
+      @doc delegate_to: {unquote(__MODULE__), :set_led, 3}
       def set_led(server \\ __MODULE__, led, value) do
         unquote(__MODULE__).set_led(server, led, value)
       end
 
+      @doc delegate_to: {unquote(__MODULE__), :write_display, 1}
       def write_display(server \\ __MODULE__) do
         unquote(__MODULE__).write_display(server)
       end
 
+      @doc delegate_to: {unquote(__MODULE__), :clear, 1}
       def clear(server \\ __MODULE__) do
         unquote(__MODULE__).clear(server)
       end
