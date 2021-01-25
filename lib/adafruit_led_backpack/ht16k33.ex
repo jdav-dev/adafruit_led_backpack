@@ -5,10 +5,7 @@ defmodule AdafruitLedBackpack.Ht16k33 do
 
   import Bitwise
 
-  @interface :adafruit_led_backpack
-             |> Application.compile_env(__MODULE__, [])
-             |> Keyword.get(:interface, AdafruitLedBackpack.Interface.I2C)
-
+  @default_interface AdafruitLedBackpack.Interface.I2C
   @default_bus_name "i2c-1"
   @default_address 0x70
 
@@ -36,11 +33,12 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   Initialize driver with LEDs enabled and all turned off.
   """
   def start_link(opts \\ []) do
+    interface = opts[:interface] || @default_interface
     bus_name = opts[:bus_name] || @default_bus_name
     address = opts[:address] || @default_address
     name = opts[:name] || __MODULE__
 
-    GenServer.start_link(__MODULE__, {bus_name, address}, name: name)
+    GenServer.start_link(__MODULE__, {interface, bus_name, address}, name: name)
   end
 
   @frequencies [:blink_off, :blink_2hz, :blink_1hz, :blink_halfhz]
@@ -96,10 +94,11 @@ defmodule AdafruitLedBackpack.Ht16k33 do
   end
 
   @impl GenServer
-  def init({bus_name, address}) do
-    case @interface.open(bus_name) do
+  def init({interface, bus_name, address}) do
+    case interface.open(bus_name) do
       {:ok, bus} ->
-        {:ok, %{address: address, buffer: @empty_buffer, bus: bus}, {:continue, :begin}}
+        {:ok, %{address: address, buffer: @empty_buffer, bus: bus, interface: interface},
+         {:continue, :begin}}
 
       error ->
         {:stop, error}
@@ -114,17 +113,17 @@ defmodule AdafruitLedBackpack.Ht16k33 do
     {:noreply, state}
   end
 
-  defp write_setup!(%{address: address, bus: bus}) do
-    @interface.write!(bus, address, @setup_data)
+  defp write_setup!(%{address: address, bus: bus, interface: interface}) do
+    interface.write!(bus, address, @setup_data)
   end
 
-  defp write_blink!(frequency, %{address: address, bus: bus}) do
-    @interface.write!(bus, address, [frequency])
+  defp write_blink!(frequency, %{address: address, bus: bus, interface: interface}) do
+    interface.write!(bus, address, [frequency])
   end
 
-  defp write_brightness!(brightness, %{address: address, bus: bus}) do
+  defp write_brightness!(brightness, %{address: address, bus: bus, interface: interface}) do
     data = brightness_data(brightness)
-    @interface.write!(bus, address, data)
+    interface.write!(bus, address, data)
   end
 
   for brightness <- 0..15 do
@@ -156,9 +155,13 @@ defmodule AdafruitLedBackpack.Ht16k33 do
     {:reply, :ok, %{state | buffer: updated_buffer}}
   end
 
-  def handle_call(:write_display, _from, %{address: address, buffer: buffer, bus: bus} = state) do
+  def handle_call(
+        :write_display,
+        _from,
+        %{address: address, buffer: buffer, bus: bus, interface: interface} = state
+      ) do
     for {byte, i} <- Enum.with_index(buffer) do
-      @interface.write!(bus, address, <<i, byte>>)
+      interface.write!(bus, address, <<i, byte>>)
     end
 
     {:reply, :ok, state}
