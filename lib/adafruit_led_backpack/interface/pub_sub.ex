@@ -9,6 +9,7 @@ if Code.ensure_loaded?(Phoenix.PubSub) do
       name = table_name(bus_name)
 
       :ets.new(name, [
+        :ordered_set,
         :public,
         :named_table,
         {:read_concurrency, true},
@@ -28,11 +29,7 @@ if Code.ensure_loaded?(Phoenix.PubSub) do
       topic = pubsub_topic(bus_name, address)
 
       with :ok <- PubSub.subscribe(AdafruitLedBackpack.PubSub, topic) do
-        {:ok,
-         bus_name
-         |> table_name()
-         |> :ets.tab2list()
-         |> Map.new()}
+        {:ok, get_registers(bus_name, address)}
       end
     rescue
       ArgumentError -> {:ok, %{}}
@@ -42,24 +39,30 @@ if Code.ensure_loaded?(Phoenix.PubSub) do
       "#{inspect(__MODULE__)}_#{bus_name}_#{address}"
     end
 
+    defp get_registers(bus_name, address) do
+      bus_name
+      |> table_name()
+      |> :ets.select([{{{address, :"$1"}, :"$2"}, [], [{{:"$1", :"$2"}}]}])
+      |> Map.new()
+    end
+
     @impl AdafruitLedBackpack.Interface
     def write!(bus_name, address, iodata) do
       name = table_name(bus_name)
       data = IO.iodata_to_binary(iodata)
 
-      case byte_size(data) do
-        1 ->
-          :ets.insert(name, {data, 0})
+      case data do
+        <<register>> ->
+          :ets.insert(name, {{address, register}, 0})
 
         _ ->
           for <<register::8, value::8 <- data>> do
-            :ets.insert(name, {register, value})
+            :ets.insert(name, {{address, register}, value})
           end
       end
 
       topic = pubsub_topic(bus_name, address)
-      data = name |> :ets.tab2list() |> Map.new()
-      message = {__MODULE__, bus_name, address, data}
+      message = {__MODULE__, bus_name, address, get_registers(bus_name, address)}
       PubSub.broadcast!(AdafruitLedBackpack.PubSub, topic, message)
     end
   end
