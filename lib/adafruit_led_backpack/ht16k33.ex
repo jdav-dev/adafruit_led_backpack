@@ -147,8 +147,8 @@ defmodule AdafruitLedBackpack.Ht16k33 do
     updated_buffer =
       List.update_at(buffer, pos, fn byte ->
         case value do
-          0 -> byte &&& ~~~(1 <<< offset)
-          1 -> byte ||| 1 <<< offset
+          :off -> byte &&& ~~~(1 <<< offset)
+          :on -> byte ||| 1 <<< offset
         end
       end)
 
