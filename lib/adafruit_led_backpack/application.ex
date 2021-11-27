@@ -7,17 +7,13 @@ defmodule AdafruitLedBackpack.Application do
 
   @impl true
   def start(_type, _args) do
-    case Code.ensure_loaded?(Phoenix.PubSub) do
-      true ->
-        children = [
-          {Phoenix.PubSub, name: AdafruitLedBackpack.PubSub}
-        ]
+    children =
+      case Code.ensure_loaded?(Phoenix.PubSub) do
+        true -> [{Phoenix.PubSub, name: AdafruitLedBackpack.PubSub}]
+        false -> []
+      end
 
-        opts = [strategy: :one_for_one, name: AdafruitLedBackpack.Supervisor]
-        Supervisor.start_link(children, opts)
-
-      false ->
-        :ignore
-    end
+    opts = [strategy: :one_for_one, name: AdafruitLedBackpack.Supervisor]
+    Supervisor.start_link(children, opts)
   end
 end
